@@ -122,7 +122,7 @@ static void launch_mul_mat_vec_cuda(
     int64_t block_size_best = warp_size;
     int64_t niter_best      = (ncols + 2*warp_size - 1) / (2*warp_size);
     int64_t max_block_size  = 256;
-    if(ggml_cuda_info().devices[device].cc > GGML_CUDA_CC_OFFSET_AMD && ggml_cuda_info().devices[device].cc < GGML_CUDA_CC_RDNA1) {
+    if(ggml_cuda_info().devices[device].cc > CC_OFFSET_AMD && ggml_cuda_info().devices[device].cc < CC_RDNA1) {
         max_block_size = 128;
     }
     for (int64_t block_size = 2*warp_size; block_size <= max_block_size; block_size += warp_size) {
