@@ -259,45 +259,47 @@ static __global__ void quantize_mmq_q8_1_id(
 }
 
 void quantize_row_q8_1_cuda(
-    const float * x, void * vy, const int64_t kx0, const int64_t kx1, const int64_t channels,
-    const int64_t kx0_padded, const ggml_type type_x, cudaStream_t stream) {
+    const float * x, void * vy, const ggml_type type_src0, const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+    const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3, cudaStream_t stream) {
 
-    GGML_ASSERT(kx0_padded % QK8_1 == 0);
+    GGML_ASSERT(ne0 % QK8_1 == 0);
 
-    const int64_t block_num_x = (kx0_padded + CUDA_QUANTIZE_BLOCK_SIZE - 1) / CUDA_QUANTIZE_BLOCK_SIZE;
-    const dim3 num_blocks(block_num_x, kx1*channels, 1);
+    const int64_t block_num_x = (ne0 + CUDA_QUANTIZE_BLOCK_SIZE - 1) / CUDA_QUANTIZE_BLOCK_SIZE;
+    const dim3 num_blocks(block_num_x, ne1, ne2*ne3);
     const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE, 1, 1);
-    quantize_q8_1<<<num_blocks, block_size, 0, stream>>>(x, vy, kx0, kx0_padded);
-
-    GGML_UNUSED(type_x);
+    quantize_q8_1<<<num_blocks, block_size, 0, stream>>>(x, vy, ne00, s01, s02, s03, ne0, ne1, ne2);
+    GGML_UNUSED(type_src0);
 }
 
 void quantize_mmq_q8_1_cuda(
-    const float * x, void * vy, const int64_t kx0, const int64_t kx1, const int64_t channels,
-    const int64_t kx0_padded, const ggml_type type_x, cudaStream_t stream) {
+    const float * x, void * vy, const ggml_type type_src0, const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+    const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3, cudaStream_t stream) {
 
-    GGML_ASSERT(kx0_padded % (4*QK8_1) == 0);
+    GGML_ASSERT(ne0 % (4*QK8_1) == 0);
 
-    const int64_t block_num_x = (kx0_padded + 4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ - 1) / (4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ);
-    const dim3 num_blocks(block_num_x, kx1, channels);
+    const int64_t block_num_x = (ne0 + 4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ - 1) / (4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ);
+    const dim3 num_blocks(block_num_x, ne1, ne2*ne3);
     const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE_MMQ, 1, 1);
-    switch (mmq_get_q8_1_ds_layout(type_x)) {
+    switch (mmq_get_q8_1_ds_layout(type_src0)) {
         case MMQ_Q8_1_DS_LAYOUT_D4:
             quantize_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_D4>
-                <<<num_blocks, block_size, 0, stream>>>(x, vy, kx0, kx1, kx0_padded);
+                <<<num_blocks, block_size, 0, stream>>>(x, vy, ne00, ne1, ne0);
             break;
         case MMQ_Q8_1_DS_LAYOUT_DS4:
             quantize_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_DS4>
-                <<<num_blocks, block_size, 0, stream>>>(x, vy, kx0, kx1, kx0_padded);
+                <<<num_blocks, block_size, 0, stream>>>(x, vy, ne00, ne1, ne0);
             break;
         case MMQ_Q8_1_DS_LAYOUT_D2S6:
             quantize_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_D2S6>
-                <<<num_blocks, block_size, 0, stream>>>(x, vy, kx0, kx1, kx0_padded);
+                <<<num_blocks, block_size, 0, stream>>>(x, vy, ne00, ne1, ne0);
             break;
         default:
             GGML_ABORT("fatal error");
             break;
     }
+    GGML_UNUSED(s01);
+    GGML_UNUSED(s02);
+    GGML_UNUSED(s03);
 }
 
 void quantize_mmq_q8_1_id_cuda(

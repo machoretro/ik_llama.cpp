@@ -5,6 +5,8 @@
 // SPDX-License-Identifier: MIT
 //
 
+#pragma once
+
 #include "common.cuh"
 #include <cstdint>
 
