@@ -309,6 +309,41 @@ static __device__ void cpy_blck_f32_q5_1(const char * cxi, char * cdsti) {
     memcpy(dsti->qh, &qh, sizeof(qh));
 }
 
+static __device__ void cpy_blck_f32_q6_0(const char * cxi, char * cdsti) {
+    const float * xi = (const float *) cxi;
+    block_q6_0 * dsti = (block_q6_0 *) cdsti;
+
+    float amax = 0.0f;
+    float vmax = 0.0f;
+
+    for (int j = 0; j < QK6_0; ++j) {
+        const float v  = xi[j];
+        const float av = fabsf(xi[j]);
+        if (amax < av) {
+            amax = av;
+            vmax = v;
+        }
+    }
+
+    const float d  = vmax / -32;
+    const float id = d ? 1.0f/d : 0.0f;
+
+    dsti->d = d;
+    memset(dsti->qh, 0, QK6_0/4);
+
+    for (int j = 0; j < QK6_0/2; ++j) {
+        const float x0 = xi[0       + j]*id;
+        const float x1 = xi[QK4_0/2 + j]*id;
+
+        const uint8_t xi0 = min(63, (int8_t)(x0 + 32.5f));
+        const uint8_t xi1 = min(63, (int8_t)(x1 + 32.5f));
+
+        dsti->qs[j]  = (xi0 & 0xf) | ((xi1 & 0xf) << 4);
+        const uint8_t h = (xi0 >> 4) | ((xi1 >> 4) << 2);
+        dsti->qh[j%(QK6_0/4)] |= (h << 4*(j/(QK6_0/4)));
+    }
+}
+
 template<dequantize_kernel_t dequant, int qk>
 static __device__ void cpy_blck_q_f32(const char * cxi, char * cdsti) {
     float * cdstf = (float *)(cdsti);
