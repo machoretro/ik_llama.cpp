@@ -3664,7 +3664,7 @@ GGML_CALL static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, cons
             return (op->src[0]->ne[0] == 64 && op->src[1]->type == GGML_TYPE_F16) || op->src[0]->ne[0] == 128;
 #else
             // TODO: more general-purpose attention sink support [TAG_ATTN_SINKS]
-            if (op->src[4] && !fp16_mma_available(ggml_cuda_info().devices[dev_ctx->device].cc)
+            if (op->src[4] && !fp16_mma_available(ggml_cuda_info().devices[cuda_ctx->device].cc)
                     && op->src[0]->ne[0] != 64 && op->src[0]->ne[0] != 128) {
                 return false;
             }
