@@ -3121,7 +3121,7 @@ GGML_CALL static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
 
 #ifdef USE_CUDA_GRAPH
 // THIREUS
-GGML_LOG_INFO("Thireus: USE_CUDA_GRAPH ON\n");
+fprintf(stderr, "Thireus: USE_CUDA_GRAPH ON\n");
 #endif
 
 #ifdef USE_CUDA_GRAPH
