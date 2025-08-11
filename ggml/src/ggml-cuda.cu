@@ -3314,8 +3314,6 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
         }
 
 #ifdef USE_CUDA_GRAPH
-// THIREUS
-printf("Thireus: USE_CUDA_GRAPH ON\n");
         if (use_cuda_graph && cuda_graph_update_required) { // End CUDA graph capture
             if (cuda_ctx->cuda_graph->graph != nullptr) {
                 CUDA_CHECK(cudaGraphDestroy(cuda_ctx->cuda_graph->graph));
@@ -3339,8 +3337,6 @@ printf("Thireus: USE_CUDA_GRAPH ON\n");
         // Launch graph
         CUDA_CHECK(cudaGraphLaunch(cuda_ctx->cuda_graph->instance, cuda_ctx->stream()));
 #else
-// THIREUS
-printf("Thireus: USE_CUDA_GRAPH OFF\n");
         graph_evaluated_or_captured = true;
 #endif  // USE_CUDA_GRAPH
     }
