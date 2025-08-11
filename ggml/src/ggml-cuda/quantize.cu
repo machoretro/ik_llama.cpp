@@ -8,66 +8,40 @@
 #include "quantize.cuh"
 #include <cstdint>
 
-static __global__ void quantize_q8_1(const float * __restrict__ x, void * __restrict__ vy, const int64_t kx, const int64_t kx0_padded) {
-    const int64_t ix0 = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;
+static __global__ void quantize_q8_1(
+        const float * __restrict__ x, void * __restrict__ vy,
+        const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t ne0, const int ne1, const int ne2) {
+    const int64_t i0 = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;
 
-    if (ix0 >= kx0_padded) {
+    if (i0 >= ne0) {
         return;
     }
 
-    const int64_t ix1 = blockIdx.y;
+    const int64_t i1 = blockIdx.y;
+    const int64_t i2 = blockIdx.z % ne2;
+    const int64_t i3 = blockIdx.z / ne2;
 
-    const int64_t i_padded = ix1*kx0_padded + ix0;
+    const int64_t & i00 = i0;
+    const int64_t & i01 = i1;
+    const int64_t & i02 = i2;
+    const int64_t & i03 = i3;
+
+    const int64_t i_cont = ((i3*ne2 + i2) * ne1 + i1) * ne0 + i0;
 
     block_q8_1 * y = (block_q8_1 *) vy;
 
-    const int64_t ib = i_padded / QK8_1; // block index
-    const int64_t iqs = i_padded % QK8_1; // quant index
+    const int64_t ib  = i_cont / QK8_1; // block index
+    const int64_t iqs = i_cont % QK8_1; // quant index
 
-    const float xi = ix0 < kx ? x[ix1*kx + ix0] : 0.0f;
+    const float xi = i0 < ne00 ? x[i03*s03 + i02*s02 + i01*s01 + i00] : 0.0f;
     float amax = fabsf(xi);
     float sum = xi;
 
     amax = warp_reduce_max(amax);
-    sum = warp_reduce_sum(sum);
+    sum  = warp_reduce_sum(sum);
 
-    const float d = amax / 127;
-    const int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
-
-    y[ib].qs[iqs] = q;
-
-    if (iqs > 0) {
-        return;
-    }
-
-    reinterpret_cast<half&>(y[ib].ds.x) = d;
-    reinterpret_cast<half&>(y[ib].ds.y) = sum;
-}
-
-static __global__ void quantize_q8_1(const float * __restrict__ x, void * __restrict__ vy, const int64_t kx, const int64_t kx0_padded, const uint64_t stride) {
-    const int64_t ix0 = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;
-
-    if (ix0 >= kx0_padded) {
-        return;
-    }
-
-    const int64_t ix1 = blockIdx.y;
-
-    const int64_t i_padded = ix1*kx0_padded + ix0;
-
-    block_q8_1 * y = (block_q8_1 *) vy;
-
-    const int64_t ib = i_padded / QK8_1; // block index
-    const int64_t iqs = i_padded % QK8_1; // quant index
-
-    const float xi = ix0 < kx ? x[ix1*stride + ix0] : 0.0f;
-    float amax = fabsf(xi);
-    float sum = xi;
-
-    amax = warp_reduce_max(amax);
-    sum = warp_reduce_sum(sum);
-
-    const float d = amax / 127;
+    const float  d = amax / 127;
     const int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
 
     y[ib].qs[iqs] = q;
@@ -112,8 +86,8 @@ static __global__ void quantize_mmq_q8_1(
 
     // Exchange max. abs. value between vals_per_scale/4 threads.
 #pragma unroll
-    for (int mask = vals_per_scale/8; mask > 0; mask >>= 1) {
-        amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, mask, WARP_SIZE));
+    for (int offset = vals_per_scale/8; offset > 0; offset >>= 1) {
+        amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, offset, WARP_SIZE));
     }
 
     float sum;
@@ -122,13 +96,12 @@ static __global__ void quantize_mmq_q8_1(
 
         // Exchange calculate sum across vals_per_sum/4 threads.
 #pragma unroll
-        for (int mask = vals_per_sum/8; mask > 0; mask >>= 1) {
-            sum += __shfl_xor_sync(0xFFFFFFFF, sum, mask, WARP_SIZE);
+        for (int offset = vals_per_sum/8; offset > 0; offset >>= 1) {
+            sum += __shfl_xor_sync(0xFFFFFFFF, sum, offset, WARP_SIZE);
         }
     }
 
-    const float d = amax/127.f;
-    const float d_inv = d > 0 ? 1/d : 0.f;
+    const float d_inv = 127.0f / amax;
     char4 q;
     q.x = roundf(xi.x*d_inv);
     q.y = roundf(xi.y*d_inv);
@@ -150,6 +123,8 @@ static __global__ void quantize_mmq_q8_1(
             return;
         }
 
+        const float d = 1.0f / d_inv;
+
         y[ib].d2s6[iqs/64] = d;
 
         return;
@@ -158,6 +133,8 @@ static __global__ void quantize_mmq_q8_1(
     if (iqs % 32 != 0) {
         return;
     }
+
+    const float d = 1.0f / d_inv;
 
     if (ds_layout == MMQ_Q8_1_DS_LAYOUT_DS4) {
         y[ib].ds4[iqs/32] = make_half2(d, sum);
