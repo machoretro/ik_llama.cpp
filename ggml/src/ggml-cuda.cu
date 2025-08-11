@@ -3120,6 +3120,11 @@ GGML_CALL static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
 }
 
 #ifdef USE_CUDA_GRAPH
+// THIREUS
+GGML_LOG_INFO("Thireus: USE_CUDA_GRAPH ON\n");
+#endif
+
+#ifdef USE_CUDA_GRAPH
 static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph,
     bool use_cuda_graph) {
     // Loop over nodes in GGML graph to obtain info needed for CUDA graph
