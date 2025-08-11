@@ -3122,10 +3122,6 @@ GGML_CALL static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
 #ifdef USE_CUDA_GRAPH
 static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph,
     bool use_cuda_graph) {
-
-    // THIREUS
-    printf("Thireus: USE_CUDA_GRAPH ON\n");
-
     // Loop over nodes in GGML graph to obtain info needed for CUDA graph
     cuda_ctx->cuda_graph->cpy_dest_ptrs.clear();
     for (int i = 0; i < cgraph->n_nodes; i++) {
@@ -3318,6 +3314,8 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
         }
 
 #ifdef USE_CUDA_GRAPH
+// THIREUS
+printf("Thireus: USE_CUDA_GRAPH ON\n");
         if (use_cuda_graph && cuda_graph_update_required) { // End CUDA graph capture
             if (cuda_ctx->cuda_graph->graph != nullptr) {
                 CUDA_CHECK(cudaGraphDestroy(cuda_ctx->cuda_graph->graph));
