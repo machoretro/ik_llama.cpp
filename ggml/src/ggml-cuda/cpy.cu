@@ -410,6 +410,27 @@ static __global__ void cpy_f32_q(const char * cx, char * cdst, const int ne,
     cpy_blck(cx + x_offset, cdst + dst_offset);
 }
 
+// Copy destination pointers to GPU to be available when pointer indirection is in use
+
+void ggml_cuda_cpy_dest_ptrs_copy(ggml_cuda_graph * cuda_graph, char ** host_dest_ptrs, const int host_dest_ptrs_size, cudaStream_t stream) {
+#if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS)
+    if (cuda_graph->dest_ptrs_size < host_dest_ptrs_size) { // (re-)allocate GPU memory for destination pointers
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        if (cuda_graph->dest_ptrs_d != nullptr) {
+            CUDA_CHECK(cudaFree(cuda_graph->dest_ptrs_d));
+        }
+        CUDA_CHECK(cudaMalloc(&cuda_graph->dest_ptrs_d, host_dest_ptrs_size*sizeof(char *)));
+        cuda_graph->dest_ptrs_size = host_dest_ptrs_size;
+    }
+    // copy destination pointers to GPU
+    CUDA_CHECK(cudaMemcpyAsync(cuda_graph->dest_ptrs_d, host_dest_ptrs, host_dest_ptrs_size*sizeof(char *), cudaMemcpyHostToDevice, stream));
+    cuda_graph->graph_cpynode_index = 0; // reset index
+#else
+    GGML_UNUSED(cuda_graph); GGML_UNUSED(host_dest_ptrs);
+    GGML_UNUSED(host_dest_ptrs_size); GGML_UNUSED(stream);
+#endif
+}
+
 static void ggml_cpy_f16_f32_cuda(
     const char * cx, char * cdst, const int ne,
     const int ne00, const int ne01, const int ne02, const int nb00, const int nb01, const int nb02,
@@ -566,7 +587,7 @@ static void copy_q8_0_to_float(ggml_backend_cuda_context & ctx, const ggml_tenso
     }
 }
 
-void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, ggml_tensor * src1) {
+void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, ggml_tensor * src1, bool disable_indirection_for_this_node) {
     const int64_t ne = ggml_nelements(src0);
     GGML_ASSERT(ne == ggml_nelements(src1));
 
@@ -603,6 +624,13 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
 
     char * src0_ddc = (char *) src0->data;
     char * src1_ddc = (char *) src1->data;
+
+#if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS)
+    if(ctx.cuda_graph->use_cpy_indirection && !disable_indirection_for_this_node) {
+        dest_ptrs_d = ctx.cuda_graph->dest_ptrs_d;
+        graph_cpynode_index = ctx.cuda_graph->graph_cpynode_index;
+    }
+#endif
 
     if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32) {
         ggml_cpy_f32_f32_cuda (src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
@@ -662,11 +690,19 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
                 src1->ne[0], src1->ne[1], src1->ne[2], src1->nb[1], src1->nb[2], src1->nb[3]);
         GGML_ABORT("fatal error");
     }
+
+#if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS)
+    if(ctx.cuda_graph->use_cpy_indirection && !disable_indirection_for_this_node) {
+        ctx.cuda_graph->graph_cpynode_index = graph_cpynode_index;
+    }
+#endif
+
 }
 
 void ggml_cuda_dup(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
-    ggml_cuda_cpy(ctx, src0, dst);
+    bool disable_indirection = true;
+    ggml_cuda_cpy(ctx, src0, dst, disable_indirection);
 }
 
 void* ggml_cuda_cpy_fn(const ggml_tensor * src0, ggml_tensor * src1) {
