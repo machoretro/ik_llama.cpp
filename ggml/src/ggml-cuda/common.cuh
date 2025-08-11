@@ -804,8 +804,10 @@ struct ggml_tensor_extra_gpu {
 };
 
 
-#if (CUDART_VERSION >= 12000) && defined(GGML_CUDA_USE_GRAPHS)
+#if ((CUDART_VERSION >= 12000) && defined(GGML_CUDA_USE_GRAPHS) || GGML_USE_HIP)
 #define USE_CUDA_GRAPH
+// THIREUS
+GGML_LOG_INFO("Thireus: USE_CUDA_GRAPH ON\n")
 #endif
 
 struct ggml_graph_node_properties {
