@@ -17,18 +17,18 @@ static __device__ void cpy_1_f32_f32(const char * cxi, char * cdsti) {
     *dsti = *xi;
 }
 
+static __device__ void cpy_1_f32_bf16(const char * cxi, char * cdsti) {
+    const float * xi = (const float *) cxi;
+    nv_bfloat16 * dsti = (nv_bfloat16 *) cdsti;
+
+    *dsti = *xi;
+}
+
 static __device__ void cpy_1_f32_f16(const char * cxi, char * cdsti) {
     const float * xi = (const float *) cxi;
     half * dsti = (half *) cdsti;
 
     *dsti = __float2half(*xi);
-}
-
-static __device__ void cpy_1_f32_bf16(const char * cxi, char * cdsti) {
-    const float * xi = (const float *) cxi;
-    nv_bfloat16 * dsti = (nv_bfloat16 *) cdsti;
-
-    *dsti = __float2bfloat16(*xi);
 }
 
 static __device__ void cpy_1_f16_f16(const char * cxi, char * cdsti) {
@@ -46,15 +46,17 @@ static __device__ void cpy_1_f16_f32(const char * cxi, char * cdsti) {
 }
 
 template <cpy_kernel_t cpy_1>
-static __global__ void cpy_f32_f16(const char * cx, char * cdst, const int ne,
+static __global__ void cpy_f32_f16(const char * cx, char * cdst_direct, const int ne,
                                    const int ne00, const int ne01, const int ne02, const int nb00, const int nb01, const int nb02,
                                    const int nb03, const int ne10, const int ne11, const int ne12, const int nb10, const int nb11,
-                                   const int nb12, const int nb13) {
+                                   const int nb12, const int nb13, char ** cdst_indirect, int graph_cpynode_index) {
     const int64_t i = blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= ne) {
         return;
     }
+
+    char * cdst = (cdst_indirect != nullptr) ? cdst_indirect[graph_cpynode_index]: cdst_direct;
 
     // determine indices i03/i13, i02/i12, i01/i11, i00/i10 as a function of index i of flattened tensor
     // then combine those indices with the corresponding byte offsets to get the total offsets
@@ -158,6 +160,18 @@ static __device__ void cpy_blck_f32_q8_0(const char * cxi, char * cdsti) {
         const float x0 = xi[j]*id;
 
         dsti->qs[j] = roundf(x0);
+    }
+}
+
+static __device__ void cpy_blck_q8_0_f32(const char * cxi, char * cdsti) {
+    float * cdstf = (float *)(cdsti);
+
+#pragma unroll
+    for (int j = 0; j < QK8_0; j += 2) {
+        dfloat2 dq;
+        dequantize_q8_0(cxi, 0, j, dq);
+        *(cdstf + j) = dq.x;
+        *(cdstf + j + 1) = dq.y;
     }
 }
 
@@ -294,39 +308,28 @@ static __device__ void cpy_blck_f32_q5_1(const char * cxi, char * cdsti) {
     memcpy(dsti->qh, &qh, sizeof(qh));
 }
 
-static __device__ void cpy_blck_f32_q6_0(const char * cxi, char * cdsti) {
-    const float * xi = (const float *) cxi;
-    block_q6_0 * dsti = (block_q6_0 *) cdsti;
+template<dequantize_kernel_t dequant, int qk>
+static __device__ void cpy_blck_q_f32(const char * cxi, char * cdsti) {
+    float * cdstf = (float *)(cdsti);
 
-    float amax = 0.0f;
-    float vmax = 0.0f;
-
-    for (int j = 0; j < QK6_0; ++j) {
-        const float v  = xi[j];
-        const float av = fabsf(xi[j]);
-        if (amax < av) {
-            amax = av;
-            vmax = v;
-        }
+#pragma unroll
+    for (int j = 0; j < qk/2; j++) {
+        dfloat2 dq;
+        dequant(cxi, 0, j, dq);
+        *(cdstf + j) = dq.x;
+        *(cdstf + j + qk/2) = dq.y;
     }
+}
 
-    const float d  = vmax / -32;
-    const float id = d ? 1.0f/d : 0.0f;
-
-    dsti->d = d;
-    memset(dsti->qh, 0, QK6_0/4);
-
-    for (int j = 0; j < QK6_0/2; ++j) {
-        const float x0 = xi[0       + j]*id;
-        const float x1 = xi[QK4_0/2 + j]*id;
-
-        const uint8_t xi0 = min(63, (int8_t)(x0 + 32.5f));
-        const uint8_t xi1 = min(63, (int8_t)(x1 + 32.5f));
-
-        dsti->qs[j]  = (xi0 & 0xf) | ((xi1 & 0xf) << 4);
-        const uint8_t h = (xi0 >> 4) | ((xi1 >> 4) << 2);
-        dsti->qh[j%(QK6_0/4)] |= (h << 4*(j/(QK6_0/4)));
+static __device__ __forceinline__ int best_index_int8(int n, const int8_t * val, float x) {
+    if (x <= val[0]) return 0;
+    if (x >= val[n-1]) return n-1;
+    int ml = 0, mu = n-1;
+    while (mu-ml > 1) {
+        int mav = (ml+mu)/2;
+        if (x < val[mav]) mu = mav; else ml = mav;
     }
+    return x - val[mu-1] < val[mu] - x ? mu-1 : mu;
 }
 
 static __device__ const int8_t iq4nl_index[241] = {
@@ -364,14 +367,12 @@ static __device__ void cpy_blck_f32_iq4_nl(const char * cxi, char * cdsti) {
     float d = vmax / kvalues_iq4nl[0];
     const float id = d ? 1.0f/d : 0.0f;
 
-    //dsti->d = d;
-
     float sumqx = 0, sumq2 = 0;
     for (int j = 0; j < QK4_NL/2; ++j) {
         const float x0 = xi[0        + j]*id;
         const float x1 = xi[QK4_NL/2 + j]*id;
-        const uint8_t xi0 = best_index_iq4nl(kvalues_iq4nl, x0);
-        const uint8_t xi1 = best_index_iq4nl(kvalues_iq4nl, x1);
+        const uint8_t xi0 = best_index_int8(16, kvalues_iq4nl, x0);
+        const uint8_t xi1 = best_index_int8(16, kvalues_iq4nl, x1);
         dsti->qs[j] = xi0 | (xi1 << 4);
         const float v0 = kvalues_iq4nl[xi0];
         const float v1 = kvalues_iq4nl[xi1];
@@ -385,15 +386,17 @@ static __device__ void cpy_blck_f32_iq4_nl(const char * cxi, char * cdsti) {
 }
 
 template <cpy_kernel_t cpy_blck, int qk>
-static __global__ void cpy_f32_q(const char * cx, char * cdst, const int ne,
+static __global__ void cpy_f32_q(const char * cx, char * cdst_direct, const int ne,
                                  const int ne00, const int ne01, const int ne02, const int nb00, const int nb01, const int nb02,
                                  const int nb03, const int ne10, const int ne11, const int ne12, const int nb10, const int nb11,
-                                 const int nb12, const int nb13) {
+                                 const int nb12, const int nb13, char ** cdst_indirect, int graph_cpynode_index) {
     const int i = (blockDim.x*blockIdx.x + threadIdx.x)*qk;
 
     if (i >= ne) {
         return;
     }
+
+    char * cdst = (cdst_indirect != nullptr) ? cdst_indirect[graph_cpynode_index]: cdst_direct;
 
     const int i03 = i/(ne00 * ne01 * ne02);
     const int i02 = (i - i03*ne00*ne01*ne02 )/ (ne00*ne01);
@@ -406,6 +409,34 @@ static __global__ void cpy_f32_q(const char * cx, char * cdst, const int ne,
     const int i11 = (i - i13*ne10*ne11*ne12 - i12*ne10*ne11) / ne10;
     const int i10 = i - i13*ne10*ne11*ne12 - i12*ne10*ne11 - i11*ne10;
     const int dst_offset = (i10/qk)*nb10 + i11*nb11 + i12*nb12 + i13*nb13;
+
+    cpy_blck(cx + x_offset, cdst + dst_offset);
+}
+
+template <cpy_kernel_t cpy_blck, int qk>
+static __global__ void cpy_q_f32(const char * cx, char * cdst_direct, const int ne,
+                                 const int ne00, const int ne01, const int ne02, const int nb00, const int nb01, const int nb02,
+                                 const int nb03, const int ne10, const int ne11, const int ne12, const int nb10, const int nb11,
+                                 const int nb12, const int nb13, char ** cdst_indirect, int graph_cpynode_index) {
+    const int i = (blockDim.x*blockIdx.x + threadIdx.x)*qk;
+
+    if (i >= ne) {
+        return;
+    }
+
+    char * cdst = (cdst_indirect != nullptr) ? cdst_indirect[graph_cpynode_index]: cdst_direct;
+
+    const int i03 = i/(ne00 * ne01 * ne02);
+    const int i02 = (i - i03*ne00*ne01*ne02 )/ (ne00*ne01);
+    const int i01 = (i - i03*ne00*ne01*ne02  -  i02*ne01*ne00) / ne00;
+    const int i00 = i - i03*ne00*ne01*ne02 - i02*ne01*ne00 - i01*ne00;
+    const int x_offset = (i00/qk)*nb00 + i01*nb01 + i02*nb02 + i03 * nb03;
+
+    const int i13 = i/(ne10 * ne11 * ne12);
+    const int i12 = (i - i13*ne10*ne11*ne12) / (ne10*ne11);
+    const int i11 = (i - i13*ne10*ne11*ne12 - i12*ne10*ne11) / ne10;
+    const int i10 = i - i13*ne10*ne11*ne12 - i12*ne10*ne11 - i11*ne10;
+    const int dst_offset = i10*nb10 + i11*nb11 + i12*nb12 + i13*nb13;
 
     cpy_blck(cx + x_offset, cdst + dst_offset);
 }
