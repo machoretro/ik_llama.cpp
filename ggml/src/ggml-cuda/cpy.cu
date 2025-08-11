@@ -6,6 +6,7 @@
 //
 
 #include "cpy.cuh"
+#include "dequantize.cuh"
 #include "convert.cuh"
 
 typedef void (*cpy_kernel_t)(const char * cx, char * cdst);
